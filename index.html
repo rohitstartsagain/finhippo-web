@@ -153,6 +153,17 @@ async function sendToAgent(text) {
       addMsg("Agent", `⚠️ ${data.error}`);
     } else {
       addMsg("Agent", data.reply);
+    const j = extractConfirmedJson(data);
+if (!j) addMsg("Agent", "🧪 (No confirmed JSON found)");
+else if (j.status && j.status.toLowerCase() === "confirmed") {
+  try {
+    await saveExpenseFromConfirmedJson(j);
+    addMsg("Agent", "💾 Saved to database.");
+  } catch (e) {
+    addMsg("Agent", `⚠️ Could not save to DB: ${e.message}`);
+  }
+}
+
 
       // 👉 NEW: Try to capture confirmed JSON and save
       const j = extractConfirmedJson(data);
@@ -257,5 +268,6 @@ async function saveExpenseFromConfirmedJson(j) {
   </script>
 </body>
 </html>
+
 
 
