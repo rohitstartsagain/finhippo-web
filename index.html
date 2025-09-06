@@ -144,8 +144,8 @@ async function sendToAgent(text) {
     try {
       data = await res.json();
     } catch {
-      const text = await res.text();
-      addMsg("Agent", `⚠️ Server error ${res.status}: ${text.slice(0,160)}…`);
+      const txt = await res.text();
+      addMsg("Agent", `⚠️ Server error ${res.status}: ${txt.slice(0,160)}…`);
       return;
     }
 
@@ -154,11 +154,28 @@ async function sendToAgent(text) {
     } else {
       addMsg("Agent", data.reply);
 
-      // 👉 Only one JSON check
-      const j = extractConfirmedJson(data);
-      if (!j) {
-        addMsg("Agent", "🧪 (No confirmed JSON found)");
-      } else if (j.status && j.status.toLowerCase() === "confirmed") {
+      // 🧪 check for confirmed JSON
+      let j = extractConfirmedJson(data);
+      if (!j && text.trim().toLowerCase() === "yes") {
+        // invisible nudge
+        const nudge = await fetch("/.netlify/functions/letta-chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: "Now output one fenced ```json block``` exactly as specified and nothing else.",
+            identifier
+          })
+        });
+        const nudgeData = await nudge.json();
+        j = extractConfirmedJson(nudgeData);
+        if (j) {
+          addMsg("Agent", "📦 (Got JSON on second try)");
+        } else {
+          addMsg("Agent", "🧪 (Still no confirmed JSON found)");
+        }
+      }
+
+      if (j && j.status && j.status.toLowerCase() === "confirmed") {
         try {
           await saveExpenseFromConfirmedJson(j);
           addMsg("Agent", "💾 Saved to database.");
@@ -175,6 +192,7 @@ async function sendToAgent(text) {
     chatInputEl.focus();
   }
 }
+
 
 
 chatSendBtn.addEventListener("click", () => {
@@ -260,6 +278,7 @@ async function saveExpenseFromConfirmedJson(j) {
   </script>
 </body>
 </html>
+
 
 
 
