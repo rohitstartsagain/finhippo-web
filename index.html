@@ -153,21 +153,12 @@ async function sendToAgent(text) {
       addMsg("Agent", `⚠️ ${data.error}`);
     } else {
       addMsg("Agent", data.reply);
-    const j = extractConfirmedJson(data);
-if (!j) addMsg("Agent", "🧪 (No confirmed JSON found)");
-else if (j.status && j.status.toLowerCase() === "confirmed") {
-  try {
-    await saveExpenseFromConfirmedJson(j);
-    addMsg("Agent", "💾 Saved to database.");
-  } catch (e) {
-    addMsg("Agent", `⚠️ Could not save to DB: ${e.message}`);
-  }
-}
 
-
-      // 👉 NEW: Try to capture confirmed JSON and save
+      // 👉 Only one JSON check
       const j = extractConfirmedJson(data);
-      if (j && j.status && j.status.toLowerCase() === "confirmed") {
+      if (!j) {
+        addMsg("Agent", "🧪 (No confirmed JSON found)");
+      } else if (j.status && j.status.toLowerCase() === "confirmed") {
         try {
           await saveExpenseFromConfirmedJson(j);
           addMsg("Agent", "💾 Saved to database.");
@@ -184,6 +175,7 @@ else if (j.status && j.status.toLowerCase() === "confirmed") {
     chatInputEl.focus();
   }
 }
+
 
 chatSendBtn.addEventListener("click", () => {
   const t = chatInputEl.value.trim();
@@ -268,6 +260,7 @@ async function saveExpenseFromConfirmedJson(j) {
   </script>
 </body>
 </html>
+
 
 
 
