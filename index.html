@@ -139,7 +139,14 @@ async function sendToAgent(text){
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, identifier })
     });
-    const data = await res.json();
+    let data;
+try { data = await res.json(); }
+catch { 
+  const text = await res.text();
+  addMsg("Agent", `⚠️ Server error ${res.status}: ${text.slice(0,160)}…`);
+  return;
+}
+
     if (data.error) {
       addMsg("Agent", `⚠️ ${data.error}`);
     } else {
@@ -166,3 +173,4 @@ chatInputEl.addEventListener("keydown", (e) => {
   </script>
 </body>
 </html>
+
