@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FinHippo — Login</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:680px;margin:40px auto;padding:0 16px}
+    h1{font-size:22px;margin-bottom:12px}
+    .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
+    input,button{padding:10px 12px;border-radius:8px;border:1px solid #d1d5db;margin:6px 0;width:100%}
+    button{cursor:pointer}
+    .row{display:flex;gap:10px}
+    .row > *{flex:1}
+    #app{display:none}
+    .muted{color:#6b7280;font-size:12px}
+  </style>
+</head>
+<body>
+  <h1>FinHippo — Sign in</h1>
+
+  <!-- AUTH CARD -->
+  <div class="card" id="auth-card">
+    <div class="row">
+      <input id="email" type="email" placeholder="email@example.com" />
+      <input id="password" type="password" placeholder="password" />
+    </div>
+    <div class="row">
+      <button id="btn-sign-in">Sign in</button>
+      <button id="btn-sign-up">Sign up</button>
+    </div>
+    <div class="muted">Use the two user accounts you created in Supabase.</div>
+    <div id="auth-msg" class="muted"></div>
+  </div>
+
+ <!-- APP CARD (visible after login) -->
+<div class="card" id="app">
+  <div id="hello"></div>
+
+  <div id="chat" style="margin-top:12px">
+    <div id="messages" style="border:1px solid #e5e7eb;border-radius:8px;padding:10px;min-height:140px;max-height:260px;overflow:auto;margin-bottom:8px"></div>
+    <div class="row">
+      <input id="chat-input" placeholder="Type a message e.g. I spent Rs 800 on lunch yesterday" />
+      <button id="chat-send">Send</button>
+    </div>
+  </div>
+
+  <button id="btn-sign-out" style="margin-top:8px">Sign out</button>
+</div>
+
+
+  <!-- Supabase + our script -->
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+
+    // ⬇️  Paste your own Supabase URL and ANON KEY between the quotes
+    const SUPABASE_URL = "https://rextklbyxobvstkyegyt.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJleHRrbGJ5eG9idnN0a3llZ3l0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTcwNjQ4ODQsImV4cCI6MjA3MjY0MDg4NH0.G4HKlLZSdKn1GLwLcpkAYkMCY9dfXz1DP1ZkTDKxtko";
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    const emailEl = document.querySelector("#email");
+    const passwordEl = document.querySelector("#password");
+    const msgEl = document.querySelector("#auth-msg");
+    const authCard = document.querySelector("#auth-card");
+    const appCard = document.querySelector("#app");
+    const helloEl = document.querySelector("#hello");
+
+    function showLoggedIn(user){
+      authCard.style.display = "none";
+      appCard.style.display = "block";
+      helloEl.textContent = `Hello, ${user.email}`;
+    }
+    function showLoggedOut(){
+      authCard.style.display = "block";
+      appCard.style.display = "none";
+      helloEl.textContent = "";
+    }
+
+    // handle existing session on load
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) showLoggedIn(user); else showLoggedOut();
+    })();
+
+    // listen for auth changes
+    supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) showLoggedIn(session.user); else showLoggedOut();
+    });
+
+    // buttons
+    document.querySelector("#btn-sign-in").addEventListener("click", async () => {
+      msgEl.textContent = "Signing in…";
+      const { error } = await supabase.auth.signInWithPassword({
+        email: emailEl.value.trim(),
+        password: passwordEl.value
+      });
+      msgEl.textContent = error ? `Error: ${error.message}` : "";
+    });
+
+    document.querySelector("#btn-sign-up").addEventListener("click", async () => {
+      msgEl.textContent = "Creating account…";
+      const { error } = await supabase.auth.signUp({
+        email: emailEl.value.trim(),
+        password: passwordEl.value
+      });
+      msgEl.textContent = error ? `Error: ${error.message}` : "Check email for confirmation (if enabled). Try sign in.";
+    });
+
+    document.querySelector("#btn-sign-out").addEventListener("click", async () => {
+      await supabase.auth.signOut();
+      showLoggedOut();
+    });
+const messagesEl = document.querySelector("#messages");
+const chatInputEl = document.querySelector("#chat-input");
+const chatSendBtn = document.querySelector("#chat-send");
+
+function addMsg(role, text){
+  const div = document.createElement("div");
+  div.style.margin = "6px 0";
+  div.innerHTML = `<strong>${role}:</strong> ${text}`;
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+async function sendToAgent(text){
+  // get current user identity to bind Letta memory
+  const { data: { user } } = await supabase.auth.getUser();
+  const identifier = user?.email || user?.id || "unknown";
+
+  addMsg("You", text);
+  chatInputEl.value = "";
+  chatInputEl.disabled = true;
+  chatSendBtn.disabled = true;
+
+  try {
+    const res = await fetch("/.netlify/functions/letta-chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, identifier })
+    });
+    const data = await res.json();
+    if (data.error) {
+      addMsg("Agent", `⚠️ ${data.error}`);
+    } else {
+      addMsg("Agent", data.reply);
+    }
+  } catch (e) {
+    addMsg("Agent", `⚠️ ${e.message}`);
+  } finally {
+    chatInputEl.disabled = false;
+    chatSendBtn.disabled = false;
+    chatInputEl.focus();
+  }
+}
+
+chatSendBtn.addEventListener("click", () => {
+  const t = chatInputEl.value.trim();
+  if (t) sendToAgent(t);
+});
+chatInputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") chatSendBtn.click();
+});
+
+
+  </script>
+</body>
+</html>
