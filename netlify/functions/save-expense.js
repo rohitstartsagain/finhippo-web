@@ -7,7 +7,7 @@ export default async (req) => {
       });
     }
 
-    // Basic shared-secret check so only your Letta tool can call this
+    // Basic shared-secret check  only your Letta tool can call this
     const auth = req.headers.get("authorization") || "";
     const token = auth.replace(/^Bearer\s+/i, "");
     if (!token || token !== process.env.TOOL_SECRET) {
