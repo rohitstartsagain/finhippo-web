@@ -123,7 +123,7 @@ function addMsg(role, text){
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-async function sendToAgent(text){
+async function sendToAgent(text) {
   // get current user identity to bind Letta memory
   const { data: { user } } = await supabase.auth.getUser();
   const identifier = user?.email || user?.id || "unknown";
@@ -139,18 +139,31 @@ async function sendToAgent(text){
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, identifier })
     });
+
     let data;
-try { data = await res.json(); }
-catch { 
-  const text = await res.text();
-  addMsg("Agent", `⚠️ Server error ${res.status}: ${text.slice(0,160)}…`);
-  return;
-}
+    try {
+      data = await res.json();
+    } catch {
+      const text = await res.text();
+      addMsg("Agent", `⚠️ Server error ${res.status}: ${text.slice(0,160)}…`);
+      return;
+    }
 
     if (data.error) {
       addMsg("Agent", `⚠️ ${data.error}`);
     } else {
       addMsg("Agent", data.reply);
+
+      // 👉 NEW: Try to capture confirmed JSON and save
+      const j = extractConfirmedJson(data);
+      if (j && j.status && j.status.toLowerCase() === "confirmed") {
+        try {
+          await saveExpenseFromConfirmedJson(j);
+          addMsg("Agent", "💾 Saved to database.");
+        } catch (e) {
+          addMsg("Agent", `⚠️ Could not save to DB: ${e.message}`);
+        }
+      }
     }
   } catch (e) {
     addMsg("Agent", `⚠️ ${e.message}`);
@@ -169,8 +182,80 @@ chatInputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") chatSendBtn.click();
 });
 
+// --- JSON extraction + DB save helpers ---
+
+function extractConfirmedJson(apiResult) {
+  // 1) Look for a Letta code element (some workspaces return this)
+  try {
+    const els = apiResult?.raw?.message?.content?.elements;
+    if (Array.isArray(els)) {
+      const codeEl = els.find(e =>
+        (e.type === "code" || e.kind === "code") &&
+        /json/i.test(e.language || e.lang || "")
+      );
+      const codeText = codeEl?.text || codeEl?.content;
+      if (codeText) return JSON.parse(codeText);
+    }
+  } catch (_) {}
+
+  // 2) Fenced code block in the text reply
+  try {
+    const t = apiResult?.reply || "";
+    const m = t.match(/```json\s*([\s\S]*?)```/i) || t.match(/```\s*([\s\S]*?)```/i);
+    if (m) return JSON.parse(m[1]);
+  } catch (_) {}
+
+  return null;
+}
+
+function normalizeDateToISO(d) {
+  // Accept "YYYY-MM-DD" or "DD-MM-YYYY"
+  if (/^\d{2}-\d{2}-\d{4}$/.test(d)) {
+    const [dd, mm, yyyy] = d.split("-");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return d;
+}
+
+async function getHouseholdIdFor(userId) {
+  // MVP: try membership; fall back to 'home-001'
+  try {
+    const { data, error } = await supabase
+      .from("household_members")
+      .select("household_id")
+      .eq("user_id", userId)
+      .single();
+    if (error) throw error;
+    return data?.household_id || "home-001";
+  } catch {
+    return "home-001";
+  }
+}
+
+async function saveExpenseFromConfirmedJson(j) {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("No session");
+
+  const household_id = await getHouseholdIdFor(user.id);
+
+  const payload = {
+    household_id,
+    user_id: user.id,
+    user_email: user.email,
+    date: normalizeDateToISO(j.date),
+    amount: Number(j.amount),
+    currency: j.currency || "INR",
+    category: j.category || "Miscellaneous",
+    description: j.description || null,
+    source: j.source || "text"
+  };
+
+  const { error } = await supabase.from("expenses").insert(payload);
+  if (error) throw error;
+}
 
   </script>
 </body>
 </html>
+
 
