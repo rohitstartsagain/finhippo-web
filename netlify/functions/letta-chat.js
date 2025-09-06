@@ -1,7 +1,7 @@
 // netlify/functions/letta-chat.js
 export default async (req, context) => {
   try {
-    // 1) Method guard
+    // 1) Only allow POST
     if (req.method !== "POST") {
       return new Response(JSON.stringify({ error: "POST only" }), {
         status: 405,
@@ -9,7 +9,7 @@ export default async (req, context) => {
       });
     }
 
-    // 2) Parse client payload
+    // 2) Parse request JSON
     let bodyJson;
     try {
       bodyJson = await req.json();
@@ -30,7 +30,7 @@ export default async (req, context) => {
       });
     }
 
-    // 3) Env checks
+    // 3) Env vars
     const LETTA_API_KEY = process.env.LETTA_API_KEY;
     const LETTA_AGENT_ID = process.env.LETTA_AGENT_ID;
     if (!LETTA_API_KEY || !LETTA_AGENT_ID) {
@@ -41,75 +41,63 @@ export default async (req, context) => {
       });
     }
 
-    // 4) Call Letta (try a few body shapes; log each)
-    const url = `https://api.letta.ai/v1/agents/${LETTA_AGENT_ID}/messages`;
+    // 4) Build request to Letta (correct domain + expected body shape)
+    const url = `https://api.letta.com/v1/agents/${LETTA_AGENT_ID}/messages`;
     const headers = {
       Authorization: `Bearer ${LETTA_API_KEY}`,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "User-Agent": "finhippo-netlify-fn/1.0"
     };
 
-    const payloads = [
-      { input: message, user: { identifier_key: identifier } },                                       // A: simple input string
-      { input: { text: message }, user: { identifier_key: identifier } },                             // B: input object
-      { message: { role: "user", content: { text: message } }, user: { identifier_key: identifier }}, // C: single message
-      { messages: [{ role: "user", content: { text: message } }], user: { identifier_key: identifier }} // D: messages array
-    ];
-
-    let lastStatus = 0;
-    let lastText = "";
-
-    for (let i = 0; i < payloads.length; i++) {
-      const attemptBody = payloads[i];
-      try {
-        console.log(`Letta attempt ${i + 1}/${payloads.length}:`, JSON.stringify(attemptBody));
-        const res = await fetch(url, { method: "POST", headers, body: JSON.stringify(attemptBody) });
-        lastStatus = res.status;
-        lastText = await res.text();
-
-        if (!res.ok) {
-          console.error(`Letta API error on attempt ${i + 1}:`, res.status, lastText);
-          continue; // try next shape
+    // Minimal, portable payload: messages array with one user message.
+    // (If you later create identities, add `sender_id` here.)
+    const body = {
+      messages: [
+        {
+          role: "user",
+          content: [{ text: message }]
+          // sender_id: "identity-xxxxxxxx", // optional when you wire identities
         }
+      ]
+    };
 
-        // Parse success JSON
-        let data;
-        try {
-          data = JSON.parse(lastText);
-        } catch (e) {
-          console.error("Success but response not JSON:", e?.message || e, lastText.slice(0, 300));
-          return new Response(JSON.stringify({ error: "Non-JSON success from Letta", raw: lastText }), {
-            status: 502,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
-
-        // Extract a visible reply robustly
-        const reply =
-          data?.message?.content?.text ??
-          data?.output?.text ??
-          data?.text ??
-          (Array.isArray(data?.messages)
-            ? data.messages.map(m => m?.content?.text).filter(Boolean).join("\n")
-            : JSON.stringify(data));
-
-        return new Response(JSON.stringify({ reply, raw: data }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      } catch (err) {
-        console.error(`Attempt ${i + 1} threw:`, err?.message || err);
-        // try next payload
-      }
-    }
-
-    // All attempts failed — return the last server message for visibility
-    return new Response(JSON.stringify({
-      error: `Letta error (status ${lastStatus}): ${lastText}`
-    }), {
-      status: 502,
-      headers: { "Content-Type": "application/json" }
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
     });
 
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Letta API error:", res.status, text);
+      return new Response(JSON.stringify({ error: `Letta error (status ${res.status}): ${text}` }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    const data = await res.json();
+
+    // 5) Extract a readable assistant reply
+    const reply =
+      (Array.isArray(data?.messages)
+        ? data.messages
+            .map(m =>
+              Array.isArray(m?.content)
+                ? (m.content.find(c => typeof c?.text === "string") || {}).text
+                : null
+            )
+            .filter(Boolean)
+            .join("\n")
+        : null) ||
+      data?.output?.text ||
+      data?.text ||
+      JSON.stringify(data);
+
+    return new Response(JSON.stringify({ reply, raw: data }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
   } catch (e) {
     console.error("Function crash:", e);
     return new Response(JSON.stringify({ error: e?.message || "Unknown error" }), {
