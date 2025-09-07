@@ -1,51 +1,49 @@
 // netlify/functions/letta-chat.js
-export default async (req, context) => {
+export default async (req) => {
   try {
-    // 1) Only POST
     if (req.method !== "POST") {
       return new Response(JSON.stringify({ error: "POST only" }), {
         status: 405, headers: { "Content-Type": "application/json" }
       });
     }
 
-    // 2) Parse body
+    // Parse body
     let bodyJson;
     try { bodyJson = await req.json(); }
-    catch (e) {
-      console.error("Bad request body (not JSON):", e?.message || e);
+    catch {
       return new Response(JSON.stringify({ error: "Body must be JSON" }), {
         status: 400, headers: { "Content-Type": "application/json" }
       });
     }
+
     const { message, identifier } = bodyJson || {};
     if (!message || !identifier) {
-      console.error("Missing fields:", { hasMessage: !!message, hasIdentifier: !!identifier });
       return new Response(JSON.stringify({ error: "message and identifier required" }), {
         status: 400, headers: { "Content-Type": "application/json" }
       });
     }
 
-    // 3) Env
+    // Env
     const LETTA_API_KEY = process.env.LETTA_API_KEY;
     const LETTA_AGENT_ID = process.env.LETTA_AGENT_ID;
+    const DEFAULT_HOUSEHOLD_ID = process.env.DEFAULT_HOUSEHOLD_ID || "unknown";
+
     if (!LETTA_API_KEY || !LETTA_AGENT_ID) {
-      console.error("Server not configured: missing LETTA_API_KEY or LETTA_AGENT_ID");
       return new Response(JSON.stringify({ error: "Server not configured" }), {
         status: 500, headers: { "Content-Type": "application/json" }
       });
     }
 
-    // 4) Call Letta with the correct schema
+    // ---- Add hidden session context as the first message
+    const contextLine =
+      `SESSION_CONTEXT: user_email=${identifier}; household_id=${DEFAULT_HOUSEHOLD_ID}`;
+
     const url = `https://api.letta.com/v1/agents/${LETTA_AGENT_ID}/messages`;
     const headers = {
       Authorization: `Bearer ${LETTA_API_KEY}`,
       "Content-Type": "application/json",
-      "User-Agent": "finhippo-netlify-fn/1.0"
+      "User-Agent": "finhippo-netlify-fn/1.1"
     };
-
-    // ▶️ New: pass hidden user context every time
-    const DEFAULT_HOUSEHOLD_ID = process.env.DEFAULT_HOUSEHOLD_ID || "unknown";
-    const contextLine = `SESSION_CONTEXT: user_email=${identifier}; household_id=${DEFAULT_HOUSEHOLD_ID}`;
 
     const body = {
       messages: [
@@ -61,11 +59,7 @@ export default async (req, context) => {
           role: "user",
           content: [{ type: "text", text: message }]
         }
-      ],
-      // keep sending the user identifier as before (optional but harmless/helpful)
-      user: {
-        identifier_key: identifier
-      }
+      ]
     };
 
     const res = await fetch(url, {
@@ -76,20 +70,22 @@ export default async (req, context) => {
 
     if (!res.ok) {
       const text = await res.text();
-      console.error("Letta API error:", res.status, text);
-      return new Response(JSON.stringify({ error: `Letta error (status ${res.status}): ${text}` }), {
-        status: 500, headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({ error: `Letta error (status ${res.status}): ${text}` }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
     }
 
     const data = await res.json();
 
-    // 5) Extract assistant reply (safe fallback)
-    const assistantMsg = (data.messages || []).reverse().find(m => m.message_type === "assistant_message");
+    // Prefer the assistant's last message text; safe fallbacks otherwise
+    const assistantMsg = (data.messages || []).slice().reverse()
+      .find(m => m.role === "assistant");
+
     const reply =
       (Array.isArray(assistantMsg?.content)
-        ? assistantMsg.content.map(p => p?.text).filter(Boolean).join("\n")
-        : assistantMsg?.content) ||
+        ? assistantMsg.content.map(p => p?.text || "").filter(Boolean).join("\n")
+        : null) ||
       data?.message?.content?.text ||
       data?.output?.text ||
       data?.text ||
@@ -100,7 +96,6 @@ export default async (req, context) => {
     });
 
   } catch (e) {
-    console.error("Function crash:", e);
     return new Response(JSON.stringify({ error: e?.message || "Unknown error" }), {
       status: 500, headers: { "Content-Type": "application/json" }
     });
