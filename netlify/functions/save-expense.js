@@ -7,85 +7,60 @@ export default async (req) => {
       });
     }
 
-    // Basic shared-secret check  only your Letta tool can call this
-    const auth = req.headers.get("authorization") || "";
-    const token = auth.replace(/^Bearer\s+/i, "");
-    if (!token || token !== process.env.TOOL_SECRET) {
+    // simple shared-secret check so only Letta can call this
+    const secret =
+      req.headers.get("x-letta-tool-secret") ||
+      req.headers.get("X-Letta-Tool-Secret");
+    if (!secret || secret !== process.env.LETTA_TOOL_SECRET) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401, headers: { "Content-Type": "application/json" }
       });
     }
 
-    const body = await req.json();
-
-    // Required fields from the tool call
+    const body = await req.json(); // what Letta sends
     const {
-      date,            // "YYYY-MM-DD" (or "DD-MM-YYYY" — we normalize)
-      amount,          // number
-      currency = "INR",
-      category = "Miscellaneous",
-      description = null,
-      user_email,      // email string (the signed-in user)
-      household_id = "home-001" // MVP default; you can override later
+      date, amount, currency = "INR",
+      category, description = null,
+      user_email = null, user_id = null,
+      household_id, source = "letta-tool"
     } = body || {};
 
-    if (!date || !amount || !user_email) {
-      return new Response(JSON.stringify({ error: "Missing fields: date, amount, user_email" }), {
-        status: 400, headers: { "Content-Type": "application/json" }
-      });
+    if (!date || !amount || !category || !household_id) {
+      return new Response(JSON.stringify({
+        error: "missing fields",
+        required: ["date","amount","category","household_id"]
+      }), { status: 400, headers: { "Content-Type": "application/json" }});
     }
 
-    // Normalize date if DD-MM-YYYY
-    let isoDate = date;
-    if (/^\d{2}-\d{2}-\d{4}$/.test(date)) {
-      const [dd, mm, yyyy] = date.split("-");
-      isoDate = `${yyyy}-${mm}-${dd}`;
-    }
+    // insert into Supabase via REST (no extra packages needed)
+    const url = `${process.env.SUPABASE_URL}/rest/v1/expenses`;
+    const payload = [{
+      household_id, user_id, user_email,
+      date, amount, currency, category, description, source
+    }];
 
-    // Build row for your "expenses" table
-    const row = {
-      household_id,
-      user_email,
-      date: isoDate,
-      amount: Number(amount),
-      currency,
-      category,
-      description,
-      source: "text"   // keep your existing convention
-    };
-
-    const SUPABASE_URL = process.env.SUPABASE_URL;                   // e.g. https://xxxx.supabase.co
-    const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;   // service role key
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
-      return new Response(JSON.stringify({ error: "Server not configured" }), {
-        status: 500, headers: { "Content-Type": "application/json" }
-      });
-    }
-
-    // Insert via Supabase REST
-    const resp = await fetch(`${SUPABASE_URL}/rest/v1/expenses`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: {
-        apikey: SUPABASE_SERVICE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`,
         "Content-Type": "application/json",
-        Prefer: "return=representation"
+        "apikey": process.env.SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        "Prefer": "return=representation"
       },
-      body: JSON.stringify(row)
+      body: JSON.stringify(payload)
     });
 
-    if (!resp.ok) {
-      const text = await resp.text();
+    if (!res.ok) {
+      const text = await res.text();
       return new Response(JSON.stringify({ error: `Supabase error: ${text}` }), {
         status: 500, headers: { "Content-Type": "application/json" }
       });
     }
 
-    const data = await resp.json();  // inserted row(s)
-    return new Response(JSON.stringify({ ok: true, row: data?.[0] || null }), {
+    const inserted = await res.json();
+    return new Response(JSON.stringify({ ok: true, row: inserted?.[0] || null }), {
       status: 200, headers: { "Content-Type": "application/json" }
     });
-
   } catch (e) {
     return new Response(JSON.stringify({ error: e?.message || "Unknown error" }), {
       status: 500, headers: { "Content-Type": "application/json" }
