@@ -43,16 +43,26 @@ export default async (req, context) => {
       "User-Agent": "finhippo-netlify-fn/1.0"
     };
 
+    // ▶️ New: pass hidden user context every time
+    const DEFAULT_HOUSEHOLD_ID = process.env.DEFAULT_HOUSEHOLD_ID || "unknown";
+    const contextLine = `SESSION_CONTEXT: user_email=${identifier}; household_id=${DEFAULT_HOUSEHOLD_ID}`;
+
     const body = {
       messages: [
+        // hidden context so the agent knows who/where to save
         {
           type: "message",
           role: "user",
-          content: [
-            { type: "text", text: message }
-          ]
+          content: [{ type: "text", text: contextLine }]
+        },
+        // the actual user message
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "text", text: message }]
         }
       ],
+      // keep sending the user identifier as before (optional but harmless/helpful)
       user: {
         identifier_key: identifier
       }
